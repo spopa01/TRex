@@ -22,6 +22,7 @@ TRexServer_SOURCES = Connection/Connection.cpp Connection/ConnectionProxy.cpp Co
 	Server/SOEPServer.cpp \
 	Test/RuleR0.cpp Test/RuleR1.cpp Test/TestResultListener.cpp \
 	Util/TRexUtils.cpp Util/Logging.cpp \
+  Parser.cpp \
 	Main.cpp
 	
 TRexServer_CPPFLAGS = $(BOOST_CPPFLAGS) -DBOOST_LOG_DYN_LINK

@@ -21,6 +21,8 @@
 #include "test.hpp"
 #include "util.hpp"
 
+#include "Parser.hpp"
+
 using concept::server::SOEPServer;
 using namespace concept::test;
 using concept::util::Logging;
@@ -53,8 +55,33 @@ void testEngine(){
 	 */
 }
 
+void testParser(){
+	TRexEngine engine(2);
+
+  RulePkt *rule = buildRule( "assign 1=>Fire, 2=>Temp define Fire( area: string ) from Temp( area => $a, temp > 50 ) where area := $a;" );
+
+	engine.processRulePkt(rule);
+	engine.finalize();
+
+	ResultListener* listener= new TestResultListener(buildPlainSubscription( rule ));
+	engine.addResultListener(listener);
+
+/*
+	vector<PubPkt*> pubPkts= testRule.buildPublication();
+	for (vector<PubPkt*>::iterator it= pubPkts.begin(); it != pubPkts.end(); it++){
+		engine.processPubPkt(*it);
+	}
+*/
+}
+
 int main(int argc, char* argv[]){
 	Logging::init();
+
+	if (argc==2 && strcmp(argv[1], "-cpp_parser")==0) {
+    testParser();
+    return 0;
+  }
+
 #ifdef HAVE_GTREX
 	if (argc==2 && strcmp(argv[1], "-gpu")==0) {
 	  cout << "Using GPU engine - GTREX" << endl;
