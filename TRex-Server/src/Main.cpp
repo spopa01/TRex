@@ -65,7 +65,6 @@ void testParser(){
 
 	ResultListener* listener= new TestResultListener(buildPlainSubscription( rule ));
 	engine.addResultListener(listener);
-
 /*
 	vector<PubPkt*> pubPkts= testRule.buildPublication();
 	for (vector<PubPkt*>::iterator it= pubPkts.begin(); it != pubPkts.end(); it++){
@@ -79,6 +78,7 @@ int main(int argc, char* argv[]){
 
 	if (argc==2 && strcmp(argv[1], "-cpp_parser")==0) {
     testParser();
+    std::cout << "Bye... :-) \n";
     return 0;
   }
 

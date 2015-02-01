@@ -578,7 +578,10 @@ bool parse( std::string const& rule_in, tesla_rule& rule_out ){
 
 //all these conversions should dissapear
 
-ValType getValType( attribute_declaration::attribute_type const& attr_type ){
+#define GUARD( CALL ) GUARD_EXT( CALL, "error" )
+#define GUARD_EXT( CALL, ERR ) do{ std::cout << "*"; if(!CALL){ std::cout << ERR << "\n"; }}while(0)
+
+ValType get_val_type( attribute_declaration::attribute_type const& attr_type ){
   ValType type;
   switch( attr_type ){
     case attribute_declaration::string_type: type = STRING; break;
@@ -589,7 +592,7 @@ ValType getValType( attribute_declaration::attribute_type const& attr_type ){
   return type;
 }
 
-CompKind getCompKind( positive_predicate::selection_policy const& sel_pol ){
+CompKind get_comp_kind( positive_predicate::selection_policy const& sel_pol ){
   CompKind kind;
   switch( sel_pol ){
     case positive_predicate::each_policy: kind = EACH_WITHIN; break;
@@ -600,7 +603,7 @@ CompKind getCompKind( positive_predicate::selection_policy const& sel_pol ){
 }
 
 //comparison !? in java they are named ConstraintOp
-Op getOp( simple_attribute_constraint::op_type const& o_type ){
+Op get_op( simple_attribute_constraint::op_type const& o_type ){
   Op op;
   switch( o_type ){
     case simple_attribute_constraint::eq_op: op = EQ; break;
@@ -609,12 +612,12 @@ Op getOp( simple_attribute_constraint::op_type const& o_type ){
     case simple_attribute_constraint::lt_op: op = LT; break;
     case simple_attribute_constraint::le_op: op = LE; break;
     case simple_attribute_constraint::neq_op: op = NE; break;
-    default: break;
+    default: break; //!!??
   }
   return op;
 }
 
-OpTreeOperation getOpTreeOperation( term::op_type const& o_type ){
+OpTreeOperation get_op_tree_operation( term::op_type const& o_type ){
   OpTreeOperation op;
   switch( o_type ){
     case term::mul_op: op = MUL; break;
@@ -633,7 +636,7 @@ enum ValRefType {
 };
 */
 
-AggregateFun getAggregateFun( aggregate_atom::aggregation_type const& agg_type ){
+AggregateFun get_aggregate_fun( aggregate_atom::aggregation_type const& agg_type ){
   AggregateFun fun = NONE;
   switch( agg_type ){
     case aggregate_atom::avg_agg: fun = AVG; break;
@@ -645,15 +648,50 @@ AggregateFun getAggregateFun( aggregate_atom::aggregation_type const& agg_type )
   return fun;
 }
 
+unsigned int delta_type( within_reference::delta_type dt ){
+  unsigned int ms = 1;
+  switch( dt ){
+    case within_reference::millisecs: break;
+    case within_reference::secs: ms = 1000; break;
+    case within_reference::mins: ms = 60*1000; break;
+    case within_reference::hours: ms = 60*60*1000; break;
+    case within_reference::days: ms = 24*60*60*1000; break;
+  }
+  return ms;
+};
+
 struct translation_context{
   translation_context() : rule_pkt(new RulePkt( false )), ce_template(NULL) {}
 
   RulePkt* rule_pkt;
   CompositeEventTemplate* ce_template;
+  
+  struct parameter{
+    unsigned int ev_id;
+    attribute_name attr_name;
+  };
+  
+  enum predicate_type{ root_predicate, positive_predicate, negative_predicate };
+  enum reference_type{ within_ref, between_ref };
+
+  struct predicate_context{
+    predicate_context() : pred_type( root_predicate ) {}
+
+    event_name predicate_name;  //used by the parameter mappings
+    predicate_type pred_type;   
+    reference_type ref_type;    //useful only for positive&negative predicates (not root)
+    CompKind sel_policy;        //useful only for positive preducates
+    unsigned int refers_to_1;   //useful for positive&negative predicates (not for root)
+    unsigned int refers_to_2;   //useful only for negative predicates using a within predicate reference
+    TimeMs win_in_millisecs;    //useful for positive predicates and negative predicates using within predicate reference
+
+    std::vector< Constraint > constraints;
+  };
 
   std::map< event_name, unsigned int > event_ids;
   std::map< attribute_name, attribute_declaration::attribute_type > attr_types;
-  std::vector< event_name > predicate_names; //could be an event name or an alias...
+  std::map< parameter_name, parameter > parameters;
+  std::vector< event_name > predicate_names; //could be an event name or an alias... and it seems to be used for indexing
 
   unsigned int get_event_id( event_name const& name ){
     unsigned int id = std::numeric_limits<short>::max(); //just some large value...
@@ -668,23 +706,152 @@ struct translation_context{
     if( it != predicate_names.end() ) idx = std::distance(predicate_names.begin(), it);
   }
 
+  void visit_predicate( predicate const& pred, predicate_context& pred_ctx ){
+    unsigned int event_id = get_event_id(pred.event_name_);
+
+    if( pred.alias_ ){
+      pred_ctx.predicate_name = *pred.alias_;            //use the alias if available
+      event_ids[ pred_ctx.predicate_name ] = event_id;   //add also the alias to the name-id map
+    }else{
+      pred_ctx.predicate_name = pred.event_name_;        //otherwise use the name
+    }
+
+    switch( pred_ctx.pred_type ){
+      case translation_context::root_predicate:
+        GUARD( rule_pkt->addRootPredicate( event_id, &pred_ctx.constraints[0], pred_ctx.constraints.size() ) );
+      break;
+      case translation_context::positive_predicate:{
+        GUARD( rule_pkt->addPredicate( event_id, &pred_ctx.constraints[0], pred_ctx.constraints.size(), pred_ctx.refers_to_1, pred_ctx.win_in_millisecs, pred_ctx.sel_policy ) );
+      }break;
+      case translation_context::negative_predicate:{
+        if( pred_ctx.ref_type == within_ref ){
+          GUARD( rule_pkt->addTimeBasedNegation( event_id, &pred_ctx.constraints[0], pred_ctx.constraints.size(), pred_ctx.refers_to_1, pred_ctx.win_in_millisecs ) );
+        }else{//between
+          GUARD( rule_pkt->addNegationBetweenStates( event_id, &pred_ctx.constraints[0], pred_ctx.constraints.size(), pred_ctx.refers_to_1, pred_ctx.refers_to_2 ) );
+        }
+      }break;
+    };
+
+    if( pred_ctx.pred_type != translation_context::negative_predicate ){
+      predicate_names.push_back(pred_ctx.predicate_name);
+    }
+  }
+
+  void visit_within_reference( predicate_context& pred_ctx, within_reference const& ref ){
+    pred_ctx.ref_type = within_ref;
+    pred_ctx.refers_to_1 = get_predicate_index( ref.event_name_ );
+    pred_ctx.win_in_millisecs = ref.delta_ * delta_type( ref.delta_type_ );//transform in millisconds
+  }
+
+  void visit_between_reference( predicate_context& pred_ctx, between_reference const& ref ){
+    pred_ctx.ref_type = between_ref;
+    pred_ctx.refers_to_1 = get_predicate_index( ref.fst_event_name_ );
+    pred_ctx.refers_to_2 = get_predicate_index( ref.snd_event_name_ );
+  }
+};
+
+class static_value_visitor : public boost::static_visitor<>{
+  Constraint& constraint;
+public:
+  static_value_visitor( Constraint& constr ) : constraint(constr) {}
+
+  void operator() ( std::string const& val ){
+    memset(  constraint.stringVal, 0, NAME_LEN+1 );
+    strncpy( constraint.stringVal, val.c_str(), NAME_LEN );
+    constraint.type = STRING;
+  }
+  void operator() ( int val ){ constraint.intVal = val; constraint.type = INT; }
+  void operator() ( float val ){ constraint.floatVal = val; constraint.type = FLOAT; }
+  void operator() ( bool val ){ constraint.boolVal = val; constraint.type = BOOL; }
+};
+
+class predicate_parameter_visitor : public boost::static_visitor<>{
+  translation_context& ctx;
+  translation_context::predicate_context& pred_ctx;
+  bool simple;
+
+public:
+  predicate_parameter_visitor( translation_context& _ctx, translation_context::predicate_context& _pred_ctx )
+    : ctx(_ctx), pred_ctx(_pred_ctx), simple(true) {}
+
+  void toggle(){ simple = !simple; }
+
+  void operator() ( parameter_mapping const& mp ){
+    if( !simple ){
+      translation_context::parameter param;
+      param.ev_id = ctx.get_predicate_index( pred_ctx.predicate_name );
+      param.attr_name = mp.attribute_name_;
+      ctx.parameters[ mp.parameter_name_ ] = param;
+    }
+  }
+
+  void operator() ( simple_attribute_constraint const& sac ){
+    if( simple ){
+      Constraint constraint;
+      memset(  constraint.name, 0, NAME_LEN+1 );
+      strncpy( constraint.name, sac.attribute_name_.c_str(), NAME_LEN );
+      constraint.op = get_op( sac.op_ );
+      static_value_visitor val_visitor( constraint );
+      boost::apply_visitor( val_visitor, sac.static_value_ );
+      pred_ctx.constraints.push_back( constraint );
+    }
+  }
+  
+  void operator() ( complex_attribute_constraint const& cac ){
+    if( !simple ){
+    }
+  }
+};
+
+class predicate_reference_visitor : public boost::static_visitor<>{
+  translation_context& ctx;
+  translation_context::predicate_context& pred_ctx;
+public:
+  predicate_reference_visitor( translation_context& _ctx, translation_context::predicate_context& _pred_ctx )
+    : ctx(_ctx), pred_ctx(_pred_ctx) {}
+
+  void operator() ( within_reference const& ref ){ ctx.visit_within_reference( pred_ctx, ref ); }
+  void operator() ( between_reference const& ref ){ ctx.visit_between_reference( pred_ctx, ref ); }
 };
 
 class pattern_predicate_visitor : public boost::static_visitor<>{
   translation_context& ctx;
+  translation_context::predicate_context pred_ctx;
+
+  static void visit_parameters( boost::optional<std::vector<predicate_parameter> >& params, predicate_parameter_visitor& visitor ){
+    if( params ){
+      std::vector<predicate_parameter>& vp = *params;
+      for( int i=0; i< vp.size(); ++i ) boost::apply_visitor( visitor, vp[i] );
+    }
+  }
+
 public:
   pattern_predicate_visitor( translation_context& _ctx ) : ctx(_ctx) {}
 
-  void operator()( positive_predicate& pred ) const{
-    TimeMs win;
-  //  ctx.rule_pkt->addPredicate(  )
+  void visit( predicate& pred ){
+    predicate_parameter_visitor param_visitor( ctx, pred_ctx );
+    visit_parameters( pred.predicate_parameters_, param_visitor );  //read simple constraints ( attr_constraint )
+    ctx.visit_predicate( pred, pred_ctx );                          //create the predicate...
+    param_visitor.toggle();                                        
+    visit_parameters( pred.predicate_parameters_, param_visitor );  //read complex constraints ( param_mapping & attr_parameters )
   }
 
-  void operator()( negative_predicate& pred ) const{
+  void operator()( positive_predicate& pred ) {
+    pred_ctx.pred_type = translation_context::positive_predicate;
+    pred_ctx.sel_policy = get_comp_kind( pred.selection_policy_ );
+    ctx.visit_within_reference( pred_ctx, pred.reference_ );
+    visit( pred.predicate_ );
   }
 
+  void operator()( negative_predicate& pred ) {
+    pred_ctx.pred_type = translation_context::negative_predicate;
+    predicate_reference_visitor ref_visitor( ctx, pred_ctx );
+    boost::apply_visitor( ref_visitor, pred.reference_ );
+    visit( pred.predicate_ );
+  }
 };
 
+// I have to say that this RulePkt class would greatly benefit from some sort of refactoring/cleaning...
 RulePkt* translate( tesla_rule& rule ){
   translation_context ctx;
 
@@ -693,31 +860,33 @@ RulePkt* translate( tesla_rule& rule ){
     ctx.event_ids[ rule.events_declaration_[i].event_name_ ] = rule.events_declaration_[i].id_;
   
   if( rule.event_definition_.attributes_declaration_ ){
-    std::vector<attribute_declaration> attributes_declaration = *(rule.event_definition_.attributes_declaration_);
+    std::vector<attribute_declaration>& attributes_declaration = *(rule.event_definition_.attributes_declaration_);
     for( int i=0; i < attributes_declaration.size(); ++i )
       ctx.attr_types[ attributes_declaration[i].attribute_name_ ] = attributes_declaration[i].attribute_type_;
   }
   
   //create the template...
-  ctx.ce_template = new CompositeEventTemplate( ctx.event_ids[rule.event_definition_.event_name_] );
+  ctx.ce_template = new CompositeEventTemplate( ctx.get_event_id(rule.event_definition_.event_name_) );
 
-  //process the trigger
-  predicate root = rule.trigger_pattern_.trigger_predicate_;
-  ctx.rule_pkt->addRootPredicate( ctx.event_ids[root.event_name_], NULL, 0 );
+  {//process the trigger(root) predicate
+    pattern_predicate_visitor root_visitor(ctx);
+    root_visitor.visit( rule.trigger_pattern_.trigger_predicate_ );
+  }
  
   //process the rest of predicates
   if( rule.trigger_pattern_.pattern_predicates_ ){
-    pattern_predicate_visitor visitor(ctx);
-    std::vector<pattern_predicate> pattern_predicates = *(rule.trigger_pattern_.pattern_predicates_);
-    for( int i=0; i < pattern_predicates.size(); ++i )
-      boost::apply_visitor( visitor, pattern_predicates[i] );
+    std::vector<pattern_predicate>& pattern_predicates = *(rule.trigger_pattern_.pattern_predicates_);
+    for( int i=0; i < pattern_predicates.size(); ++i ){
+      pattern_predicate_visitor pred_visitor(ctx);
+      boost::apply_visitor( pred_visitor, pattern_predicates[i] );
+    }
   }
   
-  //add predicates first
+  //add predicates first... in order to be able to use their indexes... !?!?
   if( rule.events_to_consume_ ){
     std::vector<event_name> events_to_consume = *(rule.events_to_consume_);
     for( int i=0; i < events_to_consume.size(); ++i )
-      ctx.rule_pkt->addConsuming( ctx.event_ids[ events_to_consume[i] ] ); //!?!?
+      GUARD( ctx.rule_pkt->addConsuming( ctx.get_predicate_index( events_to_consume[i] ) ) );
   }
 
   ctx.rule_pkt->setCompositeEventTemplate(ctx.ce_template);
