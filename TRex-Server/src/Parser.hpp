@@ -7,4 +7,6 @@ class SubPkt;
 RulePkt* buildRule( std::string const& rule );
 SubPkt* buildPlainSubscription( RulePkt* rule );
 
+//PubPkt* buildPublication( std::string const& pub );
+
 #endif//__PARSER_H__

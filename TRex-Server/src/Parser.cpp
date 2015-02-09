@@ -6,6 +6,7 @@
 #include <iostream>
 #include <string>
 #include <vector>
+#include <stack>
 
 #include <utility>
 
@@ -556,21 +557,6 @@ struct tesla_grammar : qi::grammar<It, tesla_rule(), ascii::space_type>{
 
 //--------------------------------------------------------------
 
-typedef std::string::const_iterator iter;
-
-bool parse( std::string const& rule_in, tesla_rule& rule_out ){
-  iter curr = rule_in.begin();
-  iter end = rule_in.end();
-
-  ascii::space_type ws;
-  tesla_grammar<iter> gram;
-  
-  if (phrase_parse(curr, end, gram, ws, rule_out) && curr == end)
-    return true;
-  
-  return false;
-}
-
 #include <Parser.hpp>
 
 #include <Packets/RulePkt.h>
@@ -579,9 +565,9 @@ bool parse( std::string const& rule_in, tesla_rule& rule_out ){
 //all these conversions should dissapear
 
 #define GUARD( CALL ) GUARD_EXT( CALL, "error" )
-#define GUARD_EXT( CALL, ERR ) do{ std::cout << "*"; if(!CALL){ std::cout << ERR << "\n"; }}while(0)
+#define GUARD_EXT( CALL, ERR ) do{if(!CALL){ std::cout << ERR << "\n"; }}while(0)
 
-ValType get_val_type( attribute_declaration::attribute_type const& attr_type ){
+ValType get_val_type( attribute_declaration::attribute_type attr_type ){
   ValType type;
   switch( attr_type ){
     case attribute_declaration::string_type: type = STRING; break;
@@ -592,7 +578,7 @@ ValType get_val_type( attribute_declaration::attribute_type const& attr_type ){
   return type;
 }
 
-CompKind get_comp_kind( positive_predicate::selection_policy const& sel_pol ){
+CompKind get_comp_kind( positive_predicate::selection_policy sel_pol ){
   CompKind kind;
   switch( sel_pol ){
     case positive_predicate::each_policy: kind = EACH_WITHIN; break;
@@ -603,7 +589,7 @@ CompKind get_comp_kind( positive_predicate::selection_policy const& sel_pol ){
 }
 
 //comparison !? in java they are named ConstraintOp
-Op get_op( simple_attribute_constraint::op_type const& o_type ){
+Op get_op( simple_attribute_constraint::op_type o_type ){
   Op op;
   switch( o_type ){
     case simple_attribute_constraint::eq_op: op = EQ; break;
@@ -617,7 +603,7 @@ Op get_op( simple_attribute_constraint::op_type const& o_type ){
   return op;
 }
 
-OpTreeOperation get_op_tree_operation( term::op_type const& o_type ){
+OpTreeOperation get_op_tree_operation( term::op_type o_type ){
   OpTreeOperation op;
   switch( o_type ){
     case term::mul_op: op = MUL; break;
@@ -629,14 +615,7 @@ OpTreeOperation get_op_tree_operation( term::op_type const& o_type ){
   return op;
 }
 
-/*
-enum ValRefType {
-  RULEPKT = 0,
-  STATIC = 1
-};
-*/
-
-AggregateFun get_aggregate_fun( aggregate_atom::aggregation_type const& agg_type ){
+AggregateFun get_aggregate_fun( aggregate_atom::aggregation_type agg_type ){
   AggregateFun fun = NONE;
   switch( agg_type ){
     case aggregate_atom::avg_agg: fun = AVG; break;
@@ -648,9 +627,9 @@ AggregateFun get_aggregate_fun( aggregate_atom::aggregation_type const& agg_type
   return fun;
 }
 
-unsigned int delta_type( within_reference::delta_type dt ){
+unsigned int delta_type( within_reference::delta_type d_type ){
   unsigned int ms = 1;
-  switch( dt ){
+  switch( d_type ){
     case within_reference::millisecs: break;
     case within_reference::secs: ms = 1000; break;
     case within_reference::mins: ms = 60*1000; break;
@@ -660,6 +639,82 @@ unsigned int delta_type( within_reference::delta_type dt ){
   return ms;
 };
 
+//-- print expressions in postfix format...
+
+std::ostream& operator<<( std::ostream& os, attribute_declaration::attribute_type attr_type ){
+  switch( attr_type ){
+    case attribute_declaration::string_type: os << "STRING"; break;
+    case attribute_declaration::int_type: os << "INT"; break;
+    case attribute_declaration::float_type: os << "FLOAT"; break;
+    case attribute_declaration::bool_type: os << "BOOL"; break;
+  }
+  return os;
+}
+
+std::ostream& operator<<(std::ostream& os, simple_attribute_constraint::op_type o_type){
+  switch( o_type ){
+    case simple_attribute_constraint::eq_op: os << "=="; break;
+    case simple_attribute_constraint::gt_op: os << ">"; break;
+    case simple_attribute_constraint::ge_op: os << ">="; break;
+    case simple_attribute_constraint::lt_op: os << "<"; break;
+    case simple_attribute_constraint::le_op: os << "<="; break;
+    case simple_attribute_constraint::neq_op: os << "!="; break;
+    default: break; //!!??
+  }
+  return os;
+}
+
+std::ostream& operator<<(std::ostream& os, attribute_reference const& ref){
+  return os << ref.event_name_ << "." << ref.attribute_name_;
+}
+
+class parameter_atom_visitor : public boost::static_visitor<>{
+  std::ostream& s;
+public:
+  parameter_atom_visitor( std::ostream& _s ) : s(_s) {}
+
+  void operator() ( attribute_reference const& attr_ref ){ s << " " << attr_ref << " "; }
+  void operator() ( parameter_name const& pn ){ s << " " << pn << " "; }
+  void operator() ( static_value const& sv ){ s << " " << sv << " "; }
+};
+
+std::ostream& operator<<(std::ostream& os, parameter_atom const& atm){
+  parameter_atom_visitor v(os);
+  boost::apply_visitor( v, atm );
+  return os;
+}
+
+std::ostream& operator<<(std::ostream& os, aggregate_atom const& agg){
+  return os << " xxx ";
+}
+
+std::ostream& operator<<(std::ostream& os, factor const& fct){
+  return os << fct.atom_ << ( fct.sign_ == factor::neg_sgn ? " - " : "" );
+}
+
+std::ostream& operator<<(std::ostream& os, term::op_type const& op){
+  switch( op ){
+    case term::mul_op: os << " * "; break;
+    case term::div_op: os << " / "; break;
+    case term::add_op: os << " + "; break;
+    case term::sub_op: os << " - "; break;
+  }
+  return os;
+}
+
+std::ostream& operator<<(std::ostream& os, term const& trm){
+  return os << trm.atom_ << trm.op_;
+}
+
+std::ostream& operator<<(std::ostream& os, expression const& expr){
+  os << expr.first_;
+  for( int i=0; i<expr.rest_.size(); ++i )
+    os << expr.rest_[i];
+  return os;
+}
+
+//--
+
 struct translation_context{
   translation_context() : rule_pkt(new RulePkt( false )), ce_template(NULL) {}
 
@@ -667,7 +722,7 @@ struct translation_context{
   CompositeEventTemplate* ce_template;
   
   struct parameter{
-    unsigned int ev_id;
+    unsigned int ev_id;   //the index of a predicate ...
     attribute_name attr_name;
   };
   
@@ -677,13 +732,13 @@ struct translation_context{
   struct predicate_context{
     predicate_context() : pred_type( root_predicate ) {}
 
-    event_name predicate_name;  //used by the parameter mappings
+    event_name predicate_name;  //used by the parameter mappings & agg (pos&neg)
     predicate_type pred_type;   
-    reference_type ref_type;    //useful only for positive&negative predicates (not root)
+    reference_type ref_type;    //useful only for positive,negative predicates (not root)
     CompKind sel_policy;        //useful only for positive preducates
     unsigned int refers_to_1;   //useful for positive&negative predicates (not for root)
-    unsigned int refers_to_2;   //useful only for negative predicates using a within predicate reference
-    TimeMs win_in_millisecs;    //useful for positive predicates and negative predicates using within predicate reference
+    unsigned int refers_to_2;   //useful only for negative predicates using a between predicate reference
+    TimeMs win_in_millisecs;    //useful for positive & pos agg predicates and negative predicates using within predicate reference
 
     std::vector< Constraint > constraints;
   };
@@ -692,18 +747,19 @@ struct translation_context{
   std::map< attribute_name, attribute_declaration::attribute_type > attr_types;
   std::map< parameter_name, parameter > parameters;
   std::vector< event_name > predicate_names; //could be an event name or an alias... and it seems to be used for indexing
-
+  
   unsigned int get_event_id( event_name const& name ){
     unsigned int id = std::numeric_limits<short>::max(); //just some large value...
     std::map< event_name, unsigned int >::iterator it = event_ids.find( name );
     if( it != event_ids.end() ) id = it->second;
     return id;
   }
-
-  unsigned int get_predicate_index( std::string const& pred ){
+  
+  unsigned int get_predicate_index( event_name const& pred ){
     unsigned int idx = std::numeric_limits<short>::max(); //just some large value...
     std::vector<std::string>::iterator it = std::find( predicate_names.begin(), predicate_names.end(), pred );
     if( it != predicate_names.end() ) idx = std::distance(predicate_names.begin(), it);
+    return idx;
   }
 
   void visit_predicate( predicate const& pred, predicate_context& pred_ctx ){
@@ -750,19 +806,144 @@ struct translation_context{
   }
 };
 
+//used by simple_attribute_constraint and simple_attribute_definition...
+template<typename T>
 class static_value_visitor : public boost::static_visitor<>{
-  Constraint& constraint;
+  T& v;
 public:
-  static_value_visitor( Constraint& constr ) : constraint(constr) {}
+  static_value_visitor( T& _v ) : v(_v) {}
 
   void operator() ( std::string const& val ){
-    memset(  constraint.stringVal, 0, NAME_LEN+1 );
-    strncpy( constraint.stringVal, val.c_str(), NAME_LEN );
-    constraint.type = STRING;
+    memset(  v.stringVal, 0, NAME_LEN+1 );
+    strncpy( v.stringVal, val.c_str(), NAME_LEN );
+    v.type = STRING;
   }
-  void operator() ( int val ){ constraint.intVal = val; constraint.type = INT; }
-  void operator() ( float val ){ constraint.floatVal = val; constraint.type = FLOAT; }
-  void operator() ( bool val ){ constraint.boolVal = val; constraint.type = BOOL; }
+  void operator() ( int val ){ v.intVal = val; v.type = INT; }
+  void operator() ( float val ){ v.floatVal = val; v.type = FLOAT; }
+  void operator() ( bool val ){ v.boolVal = val; v.type = BOOL; }
+};
+
+//used by complex_attribute_constraint and complex_attribute_definition...
+class expression_processor : public boost::static_visitor<>{
+  translation_context& ctx;
+  expression& expr;
+  ValType type;
+  std::stack<OpTree*> nodes;
+
+  struct static_value_processor : public boost::static_visitor<>{
+    static_value_processor( expression_processor& ep ) : parent(ep) {}
+    
+    void operator() ( std::string const& val){
+      StaticValueReference* ref = new StaticValueReference( const_cast<char*>(val.c_str()) );
+      parent.nodes.push( new OpTree( ref, STRING ) );
+    }
+
+    void operator() ( int const& val ){ 
+      StaticValueReference* ref = new StaticValueReference( val );
+      parent.nodes.push( new OpTree( ref, INT ) );
+    }
+
+    void operator() ( float const& val ){
+      StaticValueReference* ref = new StaticValueReference( val );
+      parent.nodes.push( new OpTree( ref, FLOAT ) );
+    }
+
+    void operator() ( bool const& val ){
+      StaticValueReference* ref = new StaticValueReference( val );
+      parent.nodes.push( new OpTree( ref, BOOL ) );
+    }
+    
+    expression_processor& parent;
+  };
+
+  struct parameter_atom_processor : public boost::static_visitor<>{
+    parameter_atom_processor( expression_processor& ep ) : parent(ep) {}
+
+    void operator() ( attribute_reference const& atr ){
+      unsigned int idx = parent.ctx.get_predicate_index( atr.event_name_ );
+      RulePktValueReference* ref = new RulePktValueReference( idx, const_cast<char*>(atr.attribute_name_.c_str()), STATE );
+      parent.nodes.push( new OpTree( ref, parent.type ) );
+    }
+    
+    void operator() ( parameter_name const& pn ){
+      translation_context::parameter& param = parent.ctx.parameters[ pn ];
+      RulePktValueReference* ref = new RulePktValueReference( param.ev_id, const_cast<char*>(param.attr_name.c_str()), STATE );
+      parent.nodes.push( new OpTree( ref, parent.type ) );
+    }
+
+    void operator() ( static_value const& sv ){
+      static_value_processor svp( parent );
+      boost::apply_visitor( svp, sv );
+    }
+
+    expression_processor& parent;
+  };
+ 
+  OpTree* pop_last(){
+    OpTree *node = nodes.top();
+    nodes.pop();
+    return node;
+  }
+
+  void create_inner_node( term::op_type o_type ){
+    OpTree* right = pop_last();
+    OpTree* left = pop_last();
+    nodes.push( new OpTree(left, right, get_op_tree_operation(o_type), type) );
+  }
+
+public:
+  expression_processor(translation_context& _ctx, expression& _expr, attribute_declaration::attribute_type _type ) 
+    : ctx(_ctx), expr(_expr), type(get_val_type(_type)) {}
+  
+  void operator() ( atom const& atm ){ boost::apply_visitor( *this, atm ); }
+
+  void operator() ( parameter_atom const& pa ){
+    parameter_atom_processor pap(*this);
+    boost::apply_visitor( pap, pa );
+  }
+
+  void operator() ( aggregate_atom const& atm ){
+    
+  }
+  
+  //here we should define some behaviour for bool and string too...
+  void operator() ( factor const& fct ){
+    StaticValueReference* ref = NULL;
+
+    if( fct.sign_ == factor::neg_sgn ){
+      /* add a zero node */
+      switch(type){
+        case INT: ref = new StaticValueReference( (int)0 ); break;
+        case FLOAT: ref = new StaticValueReference( (float)0 ); break;
+        default: break;
+      }
+      if(erf)
+        nodes.push( new OpTree( ref, type ) );
+    }
+
+    boost::apply_visitor( *this, fct.atom_ );
+
+    if( fct.sign_ == factor::neg_sgn && ref){
+      /* pop the last 2 nodes and create an inner node */
+      create_inner_node( term::sub_op );
+    }
+  }
+  
+  void operator() ( term const& trm ){
+    boost::apply_visitor( *this, trm.atom_ );
+    /* now pop last 2 nodes and create an inner node */
+    create_inner_node( trm.op_ );
+  }
+  
+  void operator() ( expression const& exp ){
+    boost::apply_visitor( *this, exp.first_ );
+    BOOST_FOREACH(term const& trm, exp.rest_) (*this)(trm);
+  }
+
+  OpTree* process(){
+    (*this)( expr );
+    return pop_last();
+  }
 };
 
 class predicate_parameter_visitor : public boost::static_visitor<>{
@@ -791,7 +972,7 @@ public:
       memset(  constraint.name, 0, NAME_LEN+1 );
       strncpy( constraint.name, sac.attribute_name_.c_str(), NAME_LEN );
       constraint.op = get_op( sac.op_ );
-      static_value_visitor val_visitor( constraint );
+      static_value_visitor<Constraint> val_visitor( constraint );
       boost::apply_visitor( val_visitor, sac.static_value_ );
       pred_ctx.constraints.push_back( constraint );
     }
@@ -799,6 +980,27 @@ public:
   
   void operator() ( complex_attribute_constraint const& cac ){
     if( !simple ){
+      StateType pred_type = (pred_ctx.pred_type == translation_context::negative_predicate ? NEG : STATE);
+
+      //std::cout << (pred_type == STATE ? "pos":"neg") << std::endl;
+      //std::cout << "AttrConstr Expr: " << cac.expression_ << "\n";
+
+      expression_processor ep( ctx, const_cast<expression&>(cac.expression_), cac.attribute_type_ );
+      OpTree *right = ep.process();
+      
+      ValType type = get_val_type( cac.attribute_type_ );
+      unsigned int idx = ctx.get_predicate_index( pred_ctx.predicate_name );
+      RulePktValueReference *ref = new RulePktValueReference( idx, const_cast<char*>(cac.attribute_name_.c_str()), pred_type );
+      OpTree *left = new OpTree( ref, type );
+
+      //std::cout << "type: " << cac.attribute_type_ << " idx: " << idx << " attr: " << cac.attribute_name_ << " op: " << cac.op_ << "\n";
+
+      Op op = get_op( cac.op_ );
+      if( pred_type == NEG ){
+        GUARD(ctx.rule_pkt->addComplexParameterForNegation( op, type, left, right )); //negative
+      }else{
+        GUARD(ctx.rule_pkt->addComplexParameter( op, type, left, right ));            //root & positive
+      }
     }
   }
 };
@@ -851,6 +1053,29 @@ public:
   }
 };
 
+class attribute_visitor : public boost::static_visitor<>{
+  translation_context& ctx;
+public:
+  attribute_visitor( translation_context& _ctx ) : ctx(_ctx) {}
+
+  void operator()( simple_attribute_definition& attr ) {
+    Attribute attribute;
+    memset(  attribute.name, 0, NAME_LEN+1 );
+    strncpy( attribute.name, attr.attribute_name_.c_str(), NAME_LEN );
+    static_value_visitor<Attribute> val_visitor( attribute );
+    boost::apply_visitor( val_visitor, attr.static_value_ );
+    ctx.ce_template->addStaticAttribute( attribute );
+  }
+
+  void operator()( complex_attribute_definition& attr ) {
+    //std::cout << "\nAttrDef Expr: " << attr.expression_ << "\n";
+    expression_processor ep( ctx, attr.expression_, ctx.attr_types[ attr.attribute_name_ ] );
+    ctx.ce_template->addAttribute(const_cast<char*>(attr.attribute_name_.c_str()), ep.process());
+  }
+};
+
+//--
+
 // I have to say that this RulePkt class would greatly benefit from some sort of refactoring/cleaning...
 RulePkt* translate( tesla_rule& rule ){
   translation_context ctx;
@@ -881,6 +1106,15 @@ RulePkt* translate( tesla_rule& rule ){
       boost::apply_visitor( pred_visitor, pattern_predicates[i] );
     }
   }
+
+  //process the definitions
+  if( rule.attributes_definition_ ){
+    std::vector<attribute_definition>& attributes_definition = *( rule.attributes_definition_ );
+    attribute_visitor attr_visitor(ctx);
+    for( int i=0; i < attributes_definition.size(); ++i ){
+      boost::apply_visitor( attr_visitor, attributes_definition[i] );
+    }
+  }
   
   //add predicates first... in order to be able to use their indexes... !?!?
   if( rule.events_to_consume_ ){
@@ -893,6 +1127,23 @@ RulePkt* translate( tesla_rule& rule ){
   return ctx.rule_pkt;
 }
 
+//--
+
+typedef std::string::const_iterator iter;
+
+bool parse( std::string const& rule_in, tesla_rule& rule_out ){
+  iter curr = rule_in.begin();
+  iter end = rule_in.end();
+
+  ascii::space_type ws;
+  tesla_grammar<iter> gram;
+  
+  if (phrase_parse(curr, end, gram, ws, rule_out) && curr == end)
+    return true;
+  
+  return false;
+}
+
 RulePkt* buildRule( std::string const& rule_in ){
   tesla_rule rule_out;
   if(parse( rule_in, rule_out ))
@@ -900,6 +1151,8 @@ RulePkt* buildRule( std::string const& rule_in ){
   return NULL;
 }
 
+//--
+
 SubPkt* buildPlainSubscription( RulePkt* rule ){
-  return NULL;
+	return new SubPkt(rule->getCompositeEventTemplate()->getEventType(), NULL, 0);
 }

@@ -33,6 +33,10 @@ void runServer(bool useGPU){
 	// Create server with default port and #threads = #CPUs
 	SOEPServer server(SOEPServer::DEFAULT_PORT, boost::thread::hardware_concurrency(), false, useGPU);
 
+  //install rules
+  RulePkt *rule = buildRule( "assign 1=>Ev1, 2=>Ev2, 3=>Ev3 define Ev1( val11: int ) from Ev2( val21 => $a ) and last Ev3( [int] val31 > $a ) within 10 mins from Ev2 where val11 := $a;" );
+  server.getEngine().processRulePkt(rule);
+
 	server.run();
 }
 
@@ -56,27 +60,45 @@ void testEngine(){
 }
 
 void testParser(){
-	TRexEngine engine(2);
+  TRexEngine *engine = new TRexEngine(2);
+  engine->finalize();
 
-  RulePkt *rule = buildRule( "assign 1=>Fire, 2=>Temp define Fire( area: string ) from Temp( area => $a, temp > 50 ) where area := $a;" );
+  RulePkt *rule = buildRule( "assign 1=>Ev1, 2=>Ev2, 3=>Ev3 define Ev1( val11: int ) from Ev2( val21 => $a ) and last Ev3( [int] val31 > $a ) within 10 mins from Ev2 where val11 := $a;");
+  ResultListener* listener= new TestResultListener(buildPlainSubscription( rule ));
 
-	engine.processRulePkt(rule);
-	engine.finalize();
+  engine->processRulePkt(rule);
+  engine->addResultListener(listener);	
+  
+  //send some data
 
-	ResultListener* listener= new TestResultListener(buildPlainSubscription( rule ));
-	engine.addResultListener(listener);
-/*
-	vector<PubPkt*> pubPkts= testRule.buildPublication();
-	for (vector<PubPkt*>::iterator it= pubPkts.begin(); it != pubPkts.end(); it++){
-		engine.processPubPkt(*it);
-	}
-*/
+  {//matching msg
+  Attribute attr31[1];
+	strcpy(attr31[0].name, "val31");
+	attr31[0].type= INT;
+	attr31[0].intVal= 20;
+  PubPkt* pubPkt1 = new PubPkt(3, attr31, 1);
+  engine->processPubPkt(pubPkt1);
+
+  boost::this_thread::sleep(boost::posix_time::milliseconds(10)); //!?
+
+  Attribute attr21[1];
+	strcpy(attr21[0].name, "val21");
+	attr21[0].type= INT;
+	attr21[0].intVal = 19;
+	PubPkt* pubPkt2 = new PubPkt(2, attr21, 1);
+  engine->processPubPkt(pubPkt2);
+  }
+
+  //boost::this_thread::sleep(boost::posix_time::milliseconds(500));
+  delete engine;
+  //boost::this_thread::sleep(boost::posix_time::milliseconds(500));
+  delete listener;
 }
 
 int main(int argc, char* argv[]){
 	Logging::init();
 
-	if (argc==2 && strcmp(argv[1], "-cpp_parser")==0) {
+  if (argc==2 && strcmp(argv[1], "-cpp_parser")==0) {
     testParser();
     std::cout << "Bye... :-) \n";
     return 0;
