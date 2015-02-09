@@ -99,8 +99,8 @@ struct expression;
 struct term;
 struct factor;
 
-struct aggregate_atom;
-typedef boost::variant< parameter_atom, boost::recursive_wrapper<aggregate_atom>, 
+struct aggregate;
+typedef boost::variant< parameter_atom, boost::recursive_wrapper<aggregate>, 
                         boost::recursive_wrapper<factor>, boost::recursive_wrapper<expression> > atom;
 
 struct factor{
@@ -216,8 +216,8 @@ BOOST_FUSION_ADAPT_STRUCT(
 // attribute_constraint = simple_attribute_constraint | complex_attribute_constraint;
 typedef boost::variant< simple_attribute_constraint, complex_attribute_constraint > attribute_constraint;
 
-// aggregate_atom = aggregation_type >> '(' >> attribute_reference >> '(' >> -(attribute_constraint % ',')  >> ')' >> ')' >> predicate_reference;
-struct aggregate_atom{
+// aggregate = aggregation_type >> '(' >> attribute_reference >> '(' >> -(attribute_constraint % ',')  >> ')' >> ')' >> predicate_reference;
+struct aggregate{
   enum aggregation_type{ avg_agg, sum_agg, min_agg, max_agg, count_agg };
 
   aggregation_type aggregation_type_;
@@ -227,9 +227,9 @@ struct aggregate_atom{
 };
 
 BOOST_FUSION_ADAPT_STRUCT(
-  aggregate_atom,
+  aggregate,
 
-  (aggregate_atom::aggregation_type, aggregation_type_)
+  (aggregate::aggregation_type, aggregation_type_)
   (attribute_reference, attribute_reference_)
   (boost::optional<std::vector<attribute_constraint> >, attribute_constraints_)
   (predicate_reference, reference_)
@@ -413,7 +413,7 @@ struct tesla_grammar : qi::grammar<It, tesla_rule(), ascii::space_type>{
 
     expression_ = term_ >> *( term_add_sub_op_type_ >> term_ );
     term_ = factor_ >> *( term_mul_div_op_type_ >> factor_ );
-    factor_ = parameter_atom_ | aggregate_atom_ | '(' >> expression_ >> ')' | (factor_sign_ >> factor_);
+    factor_ = parameter_atom_ | aggregate_ | '(' >> expression_ >> ')' | (factor_sign_ >> factor_);
  
     delta_type_token_.add
       ("millisecs", within_reference::millisecs)
@@ -440,13 +440,13 @@ struct tesla_grammar : qi::grammar<It, tesla_rule(), ascii::space_type>{
     attribute_constraint_ = ( simple_attribute_constraint_ | complex_attribute_constraint_ );
 
     agg_type_token_.add
-      ("AVG", aggregate_atom::avg_agg)
-      ("SUM", aggregate_atom::sum_agg)
-      ("MIN", aggregate_atom::min_agg)
-      ("MAX", aggregate_atom::max_agg)
-      ("COUNT", aggregate_atom::count_agg);
+      ("AVG", aggregate::avg_agg)
+      ("SUM", aggregate::sum_agg)
+      ("MIN", aggregate::min_agg)
+      ("MAX", aggregate::max_agg)
+      ("COUNT", aggregate::count_agg);
     agg_type_ = agg_type_token_;
-    aggregate_atom_ = (agg_type_ >> '(' >> attribute_reference_ >> '(' >> -( attribute_constraint_ % ',' )  >> ')'  >> ')' >> predicate_reference_ );
+    aggregate_ = (agg_type_ >> '(' >> attribute_reference_ >> '(' >> -( attribute_constraint_ % ',' )  >> ')'  >> ')' >> predicate_reference_ );
 
     predicate_parameter_ = (parameter_mapping_ | simple_attribute_constraint_ | complex_attribute_constraint_);
     predicate_ = event_name_ >> '(' >> -(predicate_parameter_ % ',') >> ')' >> -(lexeme["as"] >> event_name_);
@@ -523,9 +523,9 @@ struct tesla_grammar : qi::grammar<It, tesla_rule(), ascii::space_type>{
   qi::rule<It, complex_attribute_constraint(), ascii::space_type> complex_attribute_constraint_;
   qi::rule<It, attribute_constraint(), ascii::space_type> attribute_constraint_;
   
-  qi::symbols<char, aggregate_atom::aggregation_type> agg_type_token_;
-  qi::rule<It, aggregate_atom::aggregation_type()> agg_type_;
-  qi::rule<It, aggregate_atom(), ascii::space_type> aggregate_atom_;
+  qi::symbols<char, aggregate::aggregation_type> agg_type_token_;
+  qi::rule<It, aggregate::aggregation_type()> agg_type_;
+  qi::rule<It, aggregate(), ascii::space_type> aggregate_;
 
   qi::symbols<char, within_reference::delta_type> delta_type_token_;
   qi::rule<It, within_reference::delta_type() > delta_type_;
@@ -562,10 +562,10 @@ struct tesla_grammar : qi::grammar<It, tesla_rule(), ascii::space_type>{
 #include <Packets/RulePkt.h>
 #include <Packets/SubPkt.h>
 
-//all these conversions should dissapear
-
 #define GUARD( CALL ) GUARD_EXT( CALL, "error" )
-#define GUARD_EXT( CALL, ERR ) do{if(!CALL){ std::cout << ERR << "\n"; }}while(0)
+#define GUARD_EXT( CALL, ERR ) do{if(!CALL){ std::cout << "\n" << ERR << "\n" << std::flush; }}while(0)
+
+//all these conversions should dissapear
 
 ValType get_val_type( attribute_declaration::attribute_type attr_type ){
   ValType type;
@@ -615,14 +615,14 @@ OpTreeOperation get_op_tree_operation( term::op_type o_type ){
   return op;
 }
 
-AggregateFun get_aggregate_fun( aggregate_atom::aggregation_type agg_type ){
+AggregateFun get_aggregate_fun( aggregate::aggregation_type agg_type ){
   AggregateFun fun = NONE;
   switch( agg_type ){
-    case aggregate_atom::avg_agg: fun = AVG; break;
-    case aggregate_atom::sum_agg: fun = SUM; break;
-    case aggregate_atom::min_agg: fun = MIN; break;
-    case aggregate_atom::max_agg: fun = MAX; break;
-    case aggregate_atom::count_agg: fun = COUNT; break;
+    case aggregate::avg_agg: fun = AVG; break;
+    case aggregate::sum_agg: fun = SUM; break;
+    case aggregate::min_agg: fun = MIN; break;
+    case aggregate::max_agg: fun = MAX; break;
+    case aggregate::count_agg: fun = COUNT; break;
   }
   return fun;
 }
@@ -639,84 +639,10 @@ unsigned int delta_type( within_reference::delta_type d_type ){
   return ms;
 };
 
-//-- print expressions in postfix format...
-
-std::ostream& operator<<( std::ostream& os, attribute_declaration::attribute_type attr_type ){
-  switch( attr_type ){
-    case attribute_declaration::string_type: os << "STRING"; break;
-    case attribute_declaration::int_type: os << "INT"; break;
-    case attribute_declaration::float_type: os << "FLOAT"; break;
-    case attribute_declaration::bool_type: os << "BOOL"; break;
-  }
-  return os;
-}
-
-std::ostream& operator<<(std::ostream& os, simple_attribute_constraint::op_type o_type){
-  switch( o_type ){
-    case simple_attribute_constraint::eq_op: os << "=="; break;
-    case simple_attribute_constraint::gt_op: os << ">"; break;
-    case simple_attribute_constraint::ge_op: os << ">="; break;
-    case simple_attribute_constraint::lt_op: os << "<"; break;
-    case simple_attribute_constraint::le_op: os << "<="; break;
-    case simple_attribute_constraint::neq_op: os << "!="; break;
-    default: break; //!!??
-  }
-  return os;
-}
-
-std::ostream& operator<<(std::ostream& os, attribute_reference const& ref){
-  return os << ref.event_name_ << "." << ref.attribute_name_;
-}
-
-class parameter_atom_visitor : public boost::static_visitor<>{
-  std::ostream& s;
-public:
-  parameter_atom_visitor( std::ostream& _s ) : s(_s) {}
-
-  void operator() ( attribute_reference const& attr_ref ){ s << " " << attr_ref << " "; }
-  void operator() ( parameter_name const& pn ){ s << " " << pn << " "; }
-  void operator() ( static_value const& sv ){ s << " " << sv << " "; }
-};
-
-std::ostream& operator<<(std::ostream& os, parameter_atom const& atm){
-  parameter_atom_visitor v(os);
-  boost::apply_visitor( v, atm );
-  return os;
-}
-
-std::ostream& operator<<(std::ostream& os, aggregate_atom const& agg){
-  return os << " xxx ";
-}
-
-std::ostream& operator<<(std::ostream& os, factor const& fct){
-  return os << fct.atom_ << ( fct.sign_ == factor::neg_sgn ? " - " : "" );
-}
-
-std::ostream& operator<<(std::ostream& os, term::op_type const& op){
-  switch( op ){
-    case term::mul_op: os << " * "; break;
-    case term::div_op: os << " / "; break;
-    case term::add_op: os << " + "; break;
-    case term::sub_op: os << " - "; break;
-  }
-  return os;
-}
-
-std::ostream& operator<<(std::ostream& os, term const& trm){
-  return os << trm.atom_ << trm.op_;
-}
-
-std::ostream& operator<<(std::ostream& os, expression const& expr){
-  os << expr.first_;
-  for( int i=0; i<expr.rest_.size(); ++i )
-    os << expr.rest_[i];
-  return os;
-}
-
 //--
 
 struct translation_context{
-  translation_context() : rule_pkt(new RulePkt( false )), ce_template(NULL) {}
+  translation_context() : rule_pkt(new RulePkt( false )), ce_template(NULL), neg_names_idx(0) {}
 
   RulePkt* rule_pkt;
   CompositeEventTemplate* ce_template;
@@ -726,7 +652,7 @@ struct translation_context{
     attribute_name attr_name;
   };
   
-  enum predicate_type{ root_predicate, positive_predicate, negative_predicate };
+  enum predicate_type{ root_predicate, positive_predicate, negative_predicate, aggregate_predicate };
   enum reference_type{ within_ref, between_ref };
 
   struct predicate_context{
@@ -747,6 +673,8 @@ struct translation_context{
   std::map< attribute_name, attribute_declaration::attribute_type > attr_types;
   std::map< parameter_name, parameter > parameters;
   std::vector< event_name > predicate_names; //could be an event name or an alias... and it seems to be used for indexing
+  std::vector< event_name > aggregate_names; //event_name = event.attribute.func
+  unsigned int neg_names_idx;                //!?.. because negative predicates are not referenced from other predicates (because they doesn't happen)
   
   unsigned int get_event_id( event_name const& name ){
     unsigned int id = std::numeric_limits<short>::max(); //just some large value...
@@ -755,12 +683,15 @@ struct translation_context{
     return id;
   }
   
-  unsigned int get_predicate_index( event_name const& pred ){
+  static unsigned int get_index( std::vector<std::string> const& vec, std::string const& name ){
     unsigned int idx = std::numeric_limits<short>::max(); //just some large value...
-    std::vector<std::string>::iterator it = std::find( predicate_names.begin(), predicate_names.end(), pred );
-    if( it != predicate_names.end() ) idx = std::distance(predicate_names.begin(), it);
+    std::vector<std::string>::const_iterator it = std::find( vec.begin(), vec.end(), name );
+    if( it != vec.end() ) idx = std::distance(vec.begin(), it);
     return idx;
   }
+
+  unsigned int get_predicate_index( event_name const& pred ){ return get_index( predicate_names, pred ); }
+  unsigned int get_aggregate_index( event_name const& agg ){ return get_index( aggregate_names, agg ); }
 
   void visit_predicate( predicate const& pred, predicate_context& pred_ctx ){
     unsigned int event_id = get_event_id(pred.event_name_);
@@ -790,7 +721,29 @@ struct translation_context{
 
     if( pred_ctx.pred_type != translation_context::negative_predicate ){
       predicate_names.push_back(pred_ctx.predicate_name);
+    }else{
+      neg_names_idx++;
     }
+  }
+
+  void visit_aggregate( aggregate const& aggr, predicate_context& pred_ctx ){
+    std::string ev_name = aggr.attribute_reference_.event_name_;
+    unsigned int event_id = get_event_id(ev_name);
+
+    char* attr_name = const_cast<char*>(aggr.attribute_reference_.attribute_name_.c_str());
+    AggregateFun fun = get_aggregate_fun( aggr.aggregation_type_ );
+    
+    std::stringstream ss;
+    ss << ev_name << "." << attr_name << "." << fun;
+    pred_ctx.predicate_name = ss.str();
+
+    if( pred_ctx.ref_type == within_ref ){
+      GUARD( rule_pkt->addTimeBasedAggregate( event_id, &pred_ctx.constraints[0], pred_ctx.constraints.size(), pred_ctx.refers_to_1, pred_ctx.win_in_millisecs, attr_name, fun ) );
+    }else{//between
+      GUARD( rule_pkt->addAggregateBetweenStates( event_id, &pred_ctx.constraints[0], pred_ctx.constraints.size(), pred_ctx.refers_to_1, pred_ctx.refers_to_2, attr_name, fun ) );
+    }
+    
+    aggregate_names.push_back(pred_ctx.predicate_name);
   }
 
   void visit_within_reference( predicate_context& pred_ctx, within_reference const& ref ){
@@ -902,10 +855,8 @@ public:
     boost::apply_visitor( pap, pa );
   }
 
-  void operator() ( aggregate_atom const& atm ){
-    
-  }
-  
+  void operator() ( aggregate const& agg );
+
   //here we should define some behaviour for bool and string too...
   void operator() ( factor const& fct ){
     StaticValueReference* ref = NULL;
@@ -949,11 +900,19 @@ public:
 class predicate_parameter_visitor : public boost::static_visitor<>{
   translation_context& ctx;
   translation_context::predicate_context& pred_ctx;
+  StateType pred_type;
   bool simple;
 
 public:
   predicate_parameter_visitor( translation_context& _ctx, translation_context::predicate_context& _pred_ctx )
-    : ctx(_ctx), pred_ctx(_pred_ctx), simple(true) {}
+    : ctx(_ctx), pred_ctx(_pred_ctx), pred_type(STATE), simple(true)
+  {
+    switch( pred_ctx.pred_type ){
+      case translation_context::negative_predicate: pred_type = NEG; break;
+      case translation_context::aggregate_predicate: pred_type = AGG; break;
+      default: break;
+    }
+  }
 
   void toggle(){ simple = !simple; }
 
@@ -980,26 +939,33 @@ public:
   
   void operator() ( complex_attribute_constraint const& cac ){
     if( !simple ){
-      StateType pred_type = (pred_ctx.pred_type == translation_context::negative_predicate ? NEG : STATE);
-
-      //std::cout << (pred_type == STATE ? "pos":"neg") << std::endl;
-      //std::cout << "AttrConstr Expr: " << cac.expression_ << "\n";
-
       expression_processor ep( ctx, const_cast<expression&>(cac.expression_), cac.attribute_type_ );
       OpTree *right = ep.process();
       
+      RulePktValueReference *ref = NULL;
       ValType type = get_val_type( cac.attribute_type_ );
-      unsigned int idx = ctx.get_predicate_index( pred_ctx.predicate_name );
-      RulePktValueReference *ref = new RulePktValueReference( idx, const_cast<char*>(cac.attribute_name_.c_str()), pred_type );
+
+      if( pred_type == AGG ){
+        unsigned int idx = ctx.get_aggregate_index( pred_ctx.predicate_name );
+        ref = new RulePktValueReference( idx );
+      }else{
+        unsigned int idx = ( pred_type == STATE ? ctx.get_predicate_index( pred_ctx.predicate_name ) : ctx.neg_names_idx-1 );
+        ref = new RulePktValueReference( idx, const_cast<char*>(cac.attribute_name_.c_str()), pred_type );
+      }
+
       OpTree *left = new OpTree( ref, type );
 
-      //std::cout << "type: " << cac.attribute_type_ << " idx: " << idx << " attr: " << cac.attribute_name_ << " op: " << cac.op_ << "\n";
-
       Op op = get_op( cac.op_ );
-      if( pred_type == NEG ){
-        GUARD(ctx.rule_pkt->addComplexParameterForNegation( op, type, left, right )); //negative
-      }else{
+      switch( pred_type ){
+      case STATE:
         GUARD(ctx.rule_pkt->addComplexParameter( op, type, left, right ));            //root & positive
+      break;
+      case NEG:
+        GUARD(ctx.rule_pkt->addComplexParameterForNegation( op, type, left, right )); //negative
+      break;
+      case AGG:
+        GUARD(ctx.rule_pkt->addComplexParameterForAggregate( op, type, left, right )); //aggregate
+      break;
       }
     }
   }
@@ -1015,27 +981,27 @@ public:
   void operator() ( within_reference const& ref ){ ctx.visit_within_reference( pred_ctx, ref ); }
   void operator() ( between_reference const& ref ){ ctx.visit_between_reference( pred_ctx, ref ); }
 };
+  
+void visit_predicate_parameters( boost::optional<std::vector<predicate_parameter> > const& params, predicate_parameter_visitor& visitor ){
+  if( params ){
+    std::vector<predicate_parameter> const& vp = *params;
+    for( int i=0; i< vp.size(); ++i ) boost::apply_visitor( visitor, vp[i] );
+  }
+}
 
 class pattern_predicate_visitor : public boost::static_visitor<>{
   translation_context& ctx;
   translation_context::predicate_context pred_ctx;
-
-  static void visit_parameters( boost::optional<std::vector<predicate_parameter> >& params, predicate_parameter_visitor& visitor ){
-    if( params ){
-      std::vector<predicate_parameter>& vp = *params;
-      for( int i=0; i< vp.size(); ++i ) boost::apply_visitor( visitor, vp[i] );
-    }
-  }
 
 public:
   pattern_predicate_visitor( translation_context& _ctx ) : ctx(_ctx) {}
 
   void visit( predicate& pred ){
     predicate_parameter_visitor param_visitor( ctx, pred_ctx );
-    visit_parameters( pred.predicate_parameters_, param_visitor );  //read simple constraints ( attr_constraint )
-    ctx.visit_predicate( pred, pred_ctx );                          //create the predicate...
+    visit_predicate_parameters( pred.predicate_parameters_, param_visitor );  //read simple constraints ( attr_constraint )
+    ctx.visit_predicate( pred, pred_ctx );                                    //create the predicate...
     param_visitor.toggle();                                        
-    visit_parameters( pred.predicate_parameters_, param_visitor );  //read complex constraints ( param_mapping & attr_parameters )
+    visit_predicate_parameters( pred.predicate_parameters_, param_visitor );  //read complex constraints ( param_mapping & attr_parameters )
   }
 
   void operator()( positive_predicate& pred ) {
@@ -1052,6 +1018,34 @@ public:
     visit( pred.predicate_ );
   }
 };
+  
+void visit_attribute_constraints( boost::optional<std::vector<attribute_constraint> >const & constraints, predicate_parameter_visitor& visitor ){
+  if( constraints ){
+    std::vector<attribute_constraint> const& constr = *constraints;
+    for( int i=0; i< constr.size(); ++i ) boost::apply_visitor( visitor, constr[i] );
+  }
+}
+
+void expression_processor::operator() ( aggregate const& agg ){
+  translation_context::predicate_context pred_ctx;
+  pred_ctx.pred_type = translation_context::aggregate_predicate;
+  //visit the reference
+  predicate_reference_visitor ref_visitor( ctx, pred_ctx );
+  boost::apply_visitor( ref_visitor, agg.reference_ );
+  
+  predicate_parameter_visitor param_visitor( ctx, pred_ctx );
+  //visit the simple_attribute_constraints
+  visit_attribute_constraints( agg.attribute_constraints_, param_visitor );
+  //create the aggregate
+  ctx.visit_aggregate( agg, pred_ctx );
+  //visit the complex_attribute_constraints
+  param_visitor.toggle();
+  visit_attribute_constraints( agg.attribute_constraints_, param_visitor );
+
+  //create node...
+  RulePktValueReference* ref = new RulePktValueReference( ctx.get_aggregate_index( pred_ctx.predicate_name ) );
+  nodes.push( new OpTree( ref, type ) );
+}
 
 class attribute_visitor : public boost::static_visitor<>{
   translation_context& ctx;
@@ -1068,7 +1062,6 @@ public:
   }
 
   void operator()( complex_attribute_definition& attr ) {
-    //std::cout << "\nAttrDef Expr: " << attr.expression_ << "\n";
     expression_processor ep( ctx, attr.expression_, ctx.attr_types[ attr.attribute_name_ ] );
     ctx.ce_template->addAttribute(const_cast<char*>(attr.attribute_name_.c_str()), ep.process());
   }

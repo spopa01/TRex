@@ -34,8 +34,10 @@ void runServer(bool useGPU){
 	SOEPServer server(SOEPServer::DEFAULT_PORT, boost::thread::hardware_concurrency(), false, useGPU);
 
   //install rules
-  RulePkt *rule = buildRule( "assign 1=>Ev1, 2=>Ev2, 3=>Ev3 define Ev1( val11: int ) from Ev2( val21 => $a ) and last Ev3( [int] val31 > $a ) within 10 mins from Ev2 where val11 := $a;" );
+  /*
+  RulePkt *rule = buildRule( "...some rule..." );
   server.getEngine().processRulePkt(rule);
+  */
 
 	server.run();
 }
@@ -59,7 +61,9 @@ void testEngine(){
 	 */
 }
 
-void testParser(){
+void testParser1(){
+  std::cout << "\n---Test1---\n" << std::flush;
+
   TRexEngine *engine = new TRexEngine(2);
   engine->finalize();
 
@@ -71,7 +75,7 @@ void testParser(){
   
   //send some data
 
-  {//matching msg
+  {
   Attribute attr31[1];
 	strcpy(attr31[0].name, "val31");
 	attr31[0].type= INT;
@@ -89,9 +93,66 @@ void testParser(){
   engine->processPubPkt(pubPkt2);
   }
 
-  //boost::this_thread::sleep(boost::posix_time::milliseconds(500));
   delete engine;
-  //boost::this_thread::sleep(boost::posix_time::milliseconds(500));
+  delete listener;
+}
+
+void testParser2(){
+  std::cout << "\n---Test2---\n" << std::flush;
+
+  TRexEngine *engine = new TRexEngine(2);
+  engine->finalize();
+
+  RulePkt *rule = buildRule( "assign 1=>Ev1, 2=>Ev2, 3=>Ev3 define Ev1( val11: int ) from Ev2( val21 => $a ) and last Ev3( [int] val31 > $a ) within 10 mins from Ev2 where val11 := MIN( Ev2.val21() ) within 10 mins from Ev2;");
+  if( !rule ){ std::cout << "test failed" << std::flush; return; }
+  ResultListener* listener= new TestResultListener(buildPlainSubscription( rule ));
+
+  engine->processRulePkt(rule);
+  engine->addResultListener(listener);	
+  
+  //send some data
+
+  {
+  Attribute attr31[1];
+	strcpy(attr31[0].name, "val31");
+	attr31[0].type= INT;
+	attr31[0].intVal= 30;
+  PubPkt* pubPkt1 = new PubPkt(3, attr31, 1);
+  engine->processPubPkt(pubPkt1);
+  boost::this_thread::sleep(boost::posix_time::milliseconds(10)); //!?
+  }
+
+  {
+  Attribute attr21[1];
+	strcpy(attr21[0].name, "val21");
+	attr21[0].type= INT;
+	attr21[0].intVal = 19;
+	PubPkt* pubPkt2 = new PubPkt(2, attr21, 1);
+  engine->processPubPkt(pubPkt2);
+  boost::this_thread::sleep(boost::posix_time::milliseconds(10)); //!?
+  }
+  
+  {
+  Attribute attr21[1];
+	strcpy(attr21[0].name, "val21");
+	attr21[0].type= INT;
+	attr21[0].intVal = 18;
+	PubPkt* pubPkt2 = new PubPkt(2, attr21, 1);
+  engine->processPubPkt(pubPkt2);
+  boost::this_thread::sleep(boost::posix_time::milliseconds(10)); //!?
+  }
+
+  {
+  Attribute attr21[1];
+	strcpy(attr21[0].name, "val21");
+	attr21[0].type= INT;
+	attr21[0].intVal = 20;
+	PubPkt* pubPkt2 = new PubPkt(2, attr21, 1);
+  engine->processPubPkt(pubPkt2);
+  boost::this_thread::sleep(boost::posix_time::milliseconds(10)); //!?
+  }
+
+  delete engine;
   delete listener;
 }
 
@@ -99,8 +160,9 @@ int main(int argc, char* argv[]){
 	Logging::init();
 
   if (argc==2 && strcmp(argv[1], "-cpp_parser")==0) {
-    testParser();
-    std::cout << "Bye... :-) \n";
+    testParser1();
+    testParser2();
+    std::cout << "\nBye... :-) \n";
     return 0;
   }
 
